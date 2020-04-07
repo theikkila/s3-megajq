@@ -1,10 +1,13 @@
 import argparse
 import concurrent.futures
+from botocore.client import Config
 import boto3
 import time
+import tempfile
 
-s3 = boto3.client('s3')
+config = Config(connect_timeout=5, read_timeout=5, retries={'max_attempts': 1})
 
+s3 = boto3.client('s3', config=config)
 
 parser = argparse.ArgumentParser(description='MegaJQ runs SQL-statements through S3-prefixes parallel')
 
@@ -39,6 +42,7 @@ MB = 1024*1024
 GB = 1024*MB
 
 def query_bucket(bucket, k, query):
+    fp = tempfile.TemporaryFile(mode='w+')
     r = s3.select_object_content(
                 Bucket=BUCKET,
                 Key=k,
@@ -47,32 +51,42 @@ def query_bucket(bucket, k, query):
                 InputSerialization = {'JSON': {"Type": "LINES"}, "CompressionType": "NONE"},
                 OutputSerialization = {'JSON': {"RecordDelimiter": "\n"}},
         )
-    return r['Payload']
+    stats = None
+    for event in r['Payload']:
+        if 'Records' in event:
+            records = event['Records']['Payload'].decode('utf-8')
+            fp.write(records)
+        elif 'Stats' in event:
+            statsDetails = event['Stats']['Details']
+            # print(event)
+            stats = statsDetails
+    r['Payload'].close()
+    fp.seek(0)
+    return stats, fp
+
 start_time = time.time()
-with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
     #for k in get_object_keys(BUCKET, PREFIX):
     future_to_result = {executor.submit(query_bucket, BUCKET, k, query): k for k in get_object_keys(BUCKET, PREFIX)}
     total_objects = len(future_to_result)
     processed_objects = 0
     for future in concurrent.futures.as_completed(future_to_result):
         try:
-            events = future.result()
+            statsDetails, events = future.result()
+            TOTAL_BYTES_SCANNED += statsDetails.get('BytesScanned', 0)
+            TOTAL_BYTES_PROCESSED += statsDetails.get('BytesProcessed', 0)
+            TOTAL_BYTES_RETURNED += statsDetails.get('BytesReturned', 0)
+            scanned = statsDetails.get('BytesScanned', 0)//MB
+            processed = statsDetails.get('BytesProcessed', 0)//MB
+            returned = statsDetails.get('BytesReturned', 0)/MB
+            speed = TOTAL_BYTES_PROCESSED/(time.time()-start_time)
+            # print("== Stats details scanned: {}MB processed: {}MB returned: {}MB ".format(scanned, processed, returned))
+            print("== Total {}/{} scanned ({}MB/s): {}GB processed: {}GB returned: {}MB ".format(processed_objects, total_objects, speed//MB, TOTAL_BYTES_SCANNED//GB, TOTAL_BYTES_PROCESSED//GB, TOTAL_BYTES_RETURNED//MB))
             processed_objects += 1
-            for event in events:
-                if 'Records' in event:
-                    records = event['Records']['Payload'].decode('utf-8')
-                    out.write(records)
-                elif 'Stats' in event:
-                    statsDetails = event['Stats']['Details']
-                    # print(event)
-                    TOTAL_BYTES_SCANNED += statsDetails.get('BytesScanned', 0)
-                    TOTAL_BYTES_PROCESSED += statsDetails.get('BytesProcessed', 0)
-                    TOTAL_BYTES_RETURNED += statsDetails.get('BytesReturned', 0)
-                    scanned = statsDetails.get('BytesScanned', 0)//MB
-                    processed = statsDetails.get('BytesProcessed', 0)//MB
-                    returned = statsDetails.get('BytesReturned', 0)/MB
-                    speed = TOTAL_BYTES_PROCESSED/(time.time()-start_time)
-                    # print("== Stats details scanned: {}MB processed: {}MB returned: {}MB ".format(scanned, processed, returned))
-                    print("== Total {}/{} scanned ({}MB/s): {}GB processed: {}GB returned: {}MB ".format(processed_objects, total_objects, speed//MB, TOTAL_BYTES_SCANNED//GB, TOTAL_BYTES_PROCESSED//GB, TOTAL_BYTES_RETURNED//MB))
+            for event in events.readlines():
+                out.write(event)
+            events.close()
+
         except Exception as exc:
             print('generated an exception: %s' % (exc))
+            #raise exc
