@@ -1,6 +1,8 @@
 import argparse
 import concurrent.futures
 import boto3
+import time
+
 s3 = boto3.client('s3')
 
 
@@ -46,7 +48,7 @@ def query_bucket(bucket, k, query):
                 OutputSerialization = {'JSON': {"RecordDelimiter": "\n"}},
         )
     return r['Payload']
-
+start_time = time.time()
 with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
     #for k in get_object_keys(BUCKET, PREFIX):
     future_to_result = {executor.submit(query_bucket, BUCKET, k, query): k for k in get_object_keys(BUCKET, PREFIX)}
@@ -69,7 +71,8 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
                     scanned = statsDetails.get('BytesScanned', 0)//MB
                     processed = statsDetails.get('BytesProcessed', 0)//MB
                     returned = statsDetails.get('BytesReturned', 0)/MB
+                    speed = TOTAL_BYTES_PROCESSED/(time.time()-start_time)
                     # print("== Stats details scanned: {}MB processed: {}MB returned: {}MB ".format(scanned, processed, returned))
-                    print("== Total {}/{} scanned: {}GB processed: {}GB returned: {}MB ".format(processed_objects, total_objects, TOTAL_BYTES_SCANNED//GB, TOTAL_BYTES_PROCESSED//GB, TOTAL_BYTES_RETURNED//MB))
+                    print("== Total {}/{} scanned ({}MB/s): {}GB processed: {}GB returned: {}MB ".format(processed_objects, total_objects, speed//MB, TOTAL_BYTES_SCANNED//GB, TOTAL_BYTES_PROCESSED//GB, TOTAL_BYTES_RETURNED//MB))
         except Exception as exc:
             print('generated an exception: %s' % (exc))
