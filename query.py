@@ -41,7 +41,16 @@ TOTAL_BYTES_RETURNED = 0
 MB = 1024*1024
 GB = 1024*MB
 
+current_jobs = 0
+MAX_JOBS = 30
+
 def query_bucket(bucket, k, query):
+    global current_jobs
+    while True:
+        if current_jobs < MAX_JOBS:
+            current_jobs += 1
+            break
+        time.sleep(0.1)
     fp = tempfile.TemporaryFile(mode='w+')
     r = s3.select_object_content(
                 Bucket=BUCKET,
@@ -65,7 +74,7 @@ def query_bucket(bucket, k, query):
     return stats, fp
 
 start_time = time.time()
-with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_JOBS) as executor:
     #for k in get_object_keys(BUCKET, PREFIX):
     future_to_result = {executor.submit(query_bucket, BUCKET, k, query): k for k in get_object_keys(BUCKET, PREFIX)}
     total_objects = len(future_to_result)
@@ -86,6 +95,8 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
             for event in events.readlines():
                 out.write(event)
             events.close()
+            current_jobs -= 1
+            # print(current_jobs)
 
         except Exception as exc:
             print('generated an exception: %s' % (exc))
