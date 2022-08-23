@@ -51,7 +51,7 @@ def query_bucket(bucket, k, query):
             current_jobs += 1
             break
         time.sleep(0.1)
-    fp = tempfile.TemporaryFile(mode='w+')
+    fp = tempfile.TemporaryFile(mode='wb+')
     r = s3.select_object_content(
                 Bucket=BUCKET,
                 Key=k,
@@ -63,7 +63,7 @@ def query_bucket(bucket, k, query):
     stats = None
     for event in r['Payload']:
         if 'Records' in event:
-            records = event['Records']['Payload'].decode('utf-8')
+            records = event['Records']['Payload']
             fp.write(records)
         elif 'Stats' in event:
             statsDetails = event['Stats']['Details']
@@ -93,7 +93,7 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_JOBS) as executor:
             print("== Total {}/{} scanned ({}MB/s): {}GB processed: {}GB returned: {}MB ".format(processed_objects, total_objects, speed//MB, TOTAL_BYTES_SCANNED//GB, TOTAL_BYTES_PROCESSED//GB, TOTAL_BYTES_RETURNED//MB))
             processed_objects += 1
             for event in events.readlines():
-                out.write(event)
+                out.write(event.decode('utf8'))
             events.close()
             current_jobs -= 1
             # print(current_jobs)
